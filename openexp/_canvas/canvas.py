@@ -857,6 +857,22 @@ class Canvas(Backend):
         self += Polygon(vertices, **style_args)
         return 'stim%d' % self._stimnr
 
+    def _text_element(self, text, center=True, x=None, y=None, max_width=None):
+        """Creates a temporary RichText element with the current canvas font
+        settings, for use by text_size() and text_rect().
+        """
+        return RichText(
+            text,
+            center=center,
+            x=x,
+            y=y,
+            max_width=max_width,
+            font_size=self.font_size,
+            font_family=self.font_family,
+            font_bold=self.font_bold,
+            font_italic=self.font_italic
+        ).construct(self.__class__(self.experiment))
+
     def text_size(self, text, center=True, max_width=None, **style_args):
         """Determines the size of a text string in pixels. The resulting 
         dimensions reflect a bounding box around the text. This means that a tall
@@ -887,15 +903,53 @@ class Canvas(Backend):
         >>> my_canvas = Canvas()
         >>> w, h = my_canvas.text_size('Some text')
         """
-        return RichText(
-            text,
-            center=center,
-            max_width=max_width,
-            font_size=self.font_size,
-            font_family=self.font_family,
-            font_bold=self.font_bold,
-            font_italic=self.font_italic
-        ).construct(self.__class__(self.experiment)).size
+        return self._text_element(text, center=center,
+                                  max_width=max_width).size
+
+    def text_rect(self, text, center=True, x=None, y=None, max_width=None,
+                  **style_args):
+        """Determines the bounding box of a text string in pixels. The
+        resulting bounding box reflects the position and dimensions of the
+        text as it would be drawn by [canvas.text]. This can be used to
+        determine the exact coordinates of the leftmost and rightmost pixels
+        of the text.
+
+        Parameters
+        ----------
+        text : str, unicode
+            A string of text.
+        center : bool, optional
+            {{arg_center}}
+        x : int, NoneType, optional
+            The X coordinate, or None to draw horizontally centered text.
+        y : int, NoneType, optional
+            The Y coordinate, or None to draw vertically centered text.
+        max_width : int, NoneType, optional
+            {{arg_max_width}}
+        **style_args : dict
+            {{arg_style}}
+
+
+        Returns
+        -------
+        tuple
+            A (x, y, width, height) tuple containing the bounding box of
+            the text string, where x and y are the coordinates of the
+            top-left corner of the bounding box. The leftmost pixel of the
+            text is at x, and the rightmost pixel is at x + width.
+
+        Examples
+        --------
+        >>> my_canvas = Canvas()
+        >>> # Get the bounding box of centered text at the screen center
+        >>> x, y, w, h = my_canvas.text_rect('Some text')
+        >>> print('Leftmost pixel: %d, rightmost pixel: %d' % (x, x + w))
+        >>> # Get the bounding box of text at a specific position
+        >>> x, y, w, h = my_canvas.text_rect('Some text', x=100, y=50)
+        >>> print('Leftmost pixel: %d, rightmost pixel: %d' % (x, x + w))
+        """
+        return self._text_element(text, center=center, x=x, y=y,
+                                  max_width=max_width).rect
 
     def text(self, text, center=True, x=None, y=None, max_width=None,
              **style_args):
