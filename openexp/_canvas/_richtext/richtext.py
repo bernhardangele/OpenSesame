@@ -45,6 +45,162 @@ FONTS = [
 font_database = None
 font_substitutions = []
 pyqt_initialized = False
+# Default half-canvas width used when no max_width is given to text_rect().
+# This mirrors the calculation in RichText._to_qgraphicstextitem, which uses
+# canvas.width // 2 (typically 1024 // 2 = 512) as the base max_width.
+DEFAULT_HALF_CANVAS_WIDTH = 512
+
+
+def _ensure_pyqt_initialized():
+    """Initializes Qt and registers bundled fonts if not already done.
+    This is a module-level helper shared by RichText and the standalone
+    text_rect() function, so that text rendering works without a Canvas or
+    experiment instance.
+    """
+    global pyqt_initialized, app, font_database
+
+    if pyqt_initialized:
+        return
+    for subpath in [
+            ('Library', 'plugins'),
+            ('Library', 'lib', 'qt4', 'plugins')]:
+        qt_plugin_path = os.path.join(os.path.dirname(sys.executable),
+                                      *subpath)
+        if os.path.isdir(qt_plugin_path):
+            QCoreApplication.addLibraryPath(
+                safe_decode(qt_plugin_path, enc=sys.getfilesystemencoding())
+            )
+    if QCoreApplication.instance() is None:
+        app = QApplication([])
+    if font_database is None:
+        try:
+            font_database = QFontDatabase()
+        except TypeError:
+            font_database = QFontDatabase
+        for font in FONTS:
+            try:
+                path = resources[f'{font}.ttf']
+            except Exception:
+                warnings.warn(f'Font {font} not found')
+                continue
+            font_id = font_database.addApplicationFont(str(path))
+            if font_id < 0:
+                warnings.warn(f'Failed to load font {font}')
+                continue
+            font_families = font_database.applicationFontFamilies(font_id)
+            if font_families:
+                font_substitutions.append((font_families[0], font))
+    pyqt_initialized = True
+
+
+def text_rect(text, center=True, x=0, y=0, max_width=None,
+              font_family='sans', font_size=18, font_bold=False,
+              font_italic=False, html=True):
+    """Computes the bounding box of rendered text without requiring a Canvas
+    or experiment instance. This is a standalone equivalent of
+    Canvas.text_rect(), intended for use in tests and scripts.
+
+    Parameters
+    ----------
+    text : str
+        A string of text. HTML tags are interpreted when html=True.
+    center : bool, optional
+        If True (default), x and y indicate the center of the text. If
+        False, they indicate the top-left corner.
+    x : int, optional
+        The X coordinate of the text anchor point. Defaults to 0 (screen
+        center in OpenSesame coordinates).
+    y : int, optional
+        The Y coordinate of the text anchor point. Defaults to 0 (screen
+        center in OpenSesame coordinates).
+    max_width : int, NoneType, optional
+        Maximum pixel width before wrapping. Defaults to 1024 (centered)
+        or 512 (non-centered), which matches a typical 1024-pixel-wide
+        display.
+    font_family : str, optional
+        Font family name (e.g. 'sans', 'serif', 'mono'). Defaults to
+        'sans'.
+    font_size : int, optional
+        Font size in pixels. Defaults to 18.
+    font_bold : bool, optional
+        Whether the font should be bold. Defaults to False.
+    font_italic : bool, optional
+        Whether the font should be italic. Defaults to False.
+    html : bool, optional
+        Whether HTML tags are interpreted. Defaults to True.
+
+    Returns
+    -------
+    tuple
+        A (x, y, width, height) tuple. x and y are the top-left corner of
+        the bounding box. The leftmost pixel of the text is at x, and the
+        rightmost pixel is at x + width.
+
+    Examples
+    --------
+    >>> x, y, w, h = text_rect('Hello world')
+    >>> print('Leftmost pixel: %d, rightmost pixel: %d' % (x, x + w))
+    >>> x, y, w, h = text_rect('Hello world', x=100, y=50, center=False)
+    """
+    _ensure_pyqt_initialized()
+    t = QGraphicsTextItem()
+    t.setDefaultTextColor(QColor('black'))
+    decoded = safe_decode(text)
+    if html:
+        html_text = decoded.replace('\n', '<br />')
+        t.setHtml(
+            '<div align="center">%s</div>' % html_text
+            if center else html_text
+        )
+    else:
+        t.setPlainText(decoded)
+    if max_width is None:
+        # Mirror the logic in RichText._to_qgraphicstextitem: use half of a
+        # standard 1024-wide canvas, adjusted for the anchor position.
+        mw = DEFAULT_HALF_CANVAS_WIDTH - x
+        if center:
+            mw *= 2
+    else:
+        mw = max_width * 2 if center else max_width
+    t.setTextWidth(mw)
+    f = QFont(
+        font_family,
+        weight=QFont.Bold if font_bold else QFont.Normal,
+        italic=font_italic
+    )
+    for family, substitute in font_substitutions:
+        f.insertSubstitution(substitute, family)
+    f.setPixelSize(font_size)
+    t.setFont(f)
+    q_rect = t.boundingRect()
+    height = int(q_rect.height())
+    width = int(q_rect.width())
+    pixmap = QPixmap(width, height)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    t.paint(painter, QStyleOptionGraphicsItem(), None)
+    painter.end()
+    qimage = pixmap.toImage()
+    try:
+        pil_image = Image.fromqimage(qimage)
+    except (ImportError, TypeError):
+        import numpy as np
+        qimage = qimage.convertToFormat(QImage.Format_ARGB32)
+        pw = qimage.width()
+        ph = qimage.height()
+        ptr = qimage.bits()
+        ptr.setsize(qimage.byteCount())
+        arr = np.array(ptr).reshape(ph, pw, 4)
+        arr = arr[..., [2, 1, 0, 3]]
+        pil_image = Image.fromarray(arr)
+    bbox = pil_image.getbbox()
+    x1, y1, x2, y2 = (0, 0, 1, 1) if bbox is None else bbox
+    y2 = max(y1 + font_size, y2)
+    w = x2 - x1
+    h = y2 - y1
+    if center:
+        return x - w // 2, y - h // 2, w, h
+    return x, y, w, h
 
 
 class RichText(Element):
